@@ -30,14 +30,15 @@ capacity_adjustment =   st.sidebar.number_input("Capacity Adjustment (+/- slots)
 
 # Main Title
 st.title("Community Paediatrics >52 Weeks Waiting List Simulation")
+
 st.markdown("This simulation uses demand and capacity data from Excel to project waiting list impact over time.")
 
 # Load data source (excel file in this test)
 df = pd.read_excel('data_source_test.xlsx')
 
 # Define Inputs
-daily_demand = df['Demand'] + demand_adjustment
-daily_capacity = df['Capacity'] + capacity_adjustment# appointments available per day
+daily_demand = df['Demand'] + demand_adjustment # patients per day
+daily_capacity = df['Capacity'] + capacity_adjustment # appointments available per day
 days_to_simulate = len(df)
 
 # Simulate Waiting List Over Time
@@ -46,7 +47,6 @@ waiting_list = [initial_waiting_list]
 for day in range(days_to_simulate):     # loops through each row of the input file
     demand = daily_demand.iloc[day]     # scalar value
     capacity = daily_capacity.iloc[day] # scalar value
-
     net_change = demand - capacity      # scalar result
     new_waiting_list = max(waiting_list[-1] + net_change, 0)
     waiting_list.append(new_waiting_list)
@@ -63,3 +63,6 @@ st.download_button(
     data=df.to_csv(index=False),
     file_name="waiting_list_simulation.csv"
 )
+
+# Copyright
+st.markdown("© Opel Consultancy Ltd.")
