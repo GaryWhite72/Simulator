@@ -4,4 +4,4 @@ openpyxl
 matplotlib
 plotly
 sqlalcemy
-datetime, date
+datetime
