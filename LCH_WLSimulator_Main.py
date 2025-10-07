@@ -21,6 +21,9 @@ df = pd.read_excel("data_source_branch4.xlsx")
 df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace("(", "").str.replace(")", "")
 df["WeekCommencing"] = pd.to_datetime(df["WeekCommencing"])
 
+# Lock in the untouched baseline BEFORE any resets or initiatives
+df["DoNothingBaseline"] = df["Over52Weeks"].copy()
+
 # --- Session Setup ---
 if "selected_service" not in st.session_state:
     st.session_state.selected_service = ""
@@ -49,8 +52,12 @@ service_df = df[df["Entity"] == selected_service].sort_values("WeekCommencing")
 today = pd.to_datetime(datetime.today().date())
 historic = service_df[service_df["WeekCommencing"] < today]
 
+# Lock in the untouched baseline BEFORE any resets or initiatives
+service_df["DoNothingBaseline"] = df["Over52Weeks"].copy()
+
 # --- Styled Title ---
-st.markdown(f"<h2 style='font-weight:bold;'>{selected_service} &gt;52 Week Waiting List Simulation</h2>",
+st.markdown(f"""<h2 style='font-weight:bold;'>{selected_service} <br>
+            &gt;52 Week Waiting List Simulation</h2>""",
             unsafe_allow_html=True)
 
 # --- Percentile Calculation ---
@@ -68,7 +75,7 @@ for i in range(5):
         name = st.text_input("Initiative Name", key=f"name_{i}")
         start = st.date_input("Start Date", key=f"start_{i}")
         change = st.number_input("Capacity Change", value=0, step=1, key=f"change_{i}")
-        
+
         use_end = st.checkbox("Set End Date?", key=f"use_end_{i}")
         end = None
         if use_end:
@@ -92,11 +99,13 @@ st.sidebar.header("🔄 Waiting List Resets")
 # Reset 1
 enable_reset_1 = st.sidebar.checkbox("Enable Reset 1", value=False)
 if enable_reset_1:
-    reset_date_1 = st.sidebar.date_input("Reset 1 Date", value=datetime(2025, 11, 1), key="reset_date_1")
+    reset_date_1 = st.sidebar.date_input("Reset 1 Date", value=datetime.today(), key="reset_date_1")
     last_actual_row = service_df[service_df["WeekCommencing"] < today].iloc[-1]
     default_reset_value_1 = int(last_actual_row["Over52Weeks"])
     reset_value_1 = st.sidebar.number_input("Reset 1 Value", min_value=1, max_value=3000,
-                                            value=default_reset_value_1, step=1, key="reset_value_1")
+                                            value=default_reset_value_1,
+                                            step=1,
+                                            key="reset_value_1")
 else:
     reset_date_1 = None
     reset_value_1 = None
@@ -104,10 +113,13 @@ else:
 # Reset 2
 enable_reset_2 = st.sidebar.checkbox("Enable Reset 2", value=False)
 if enable_reset_2:
-    reset_date_2 = st.sidebar.date_input("Reset 2 Date", value=datetime(2026, 1, 1), key="reset_date_2")
+    reset_date_2 = st.sidebar.date_input("Reset 2 Date", value=datetime.today(), key="reset_date_2")
     default_reset_value_2 = int(last_actual_row["Over52Weeks"])
-    reset_value_2 = st.sidebar.number_input("Reset 2 Value", min_value=1, max_value=3000,
-                                            value=default_reset_value_2, step=1, key="reset_value_2")
+    reset_value_2 = st.sidebar.number_input("Reset 2 Value",
+                                            min_value=1,
+                                            max_value=3000,
+                                            value=default_reset_value_2,
+                                            step=1, key="reset_value_2")
 else:
     reset_date_2 = None
     reset_value_2 = None
@@ -159,8 +171,42 @@ def simulate_future(df, weeks_ahead, initiatives):
 
     return pd.DataFrame(future_data)
 
+# --- Forecast Simulation without Initiative Effects ---
+def simulate_baseline(df, weeks_ahead):
+    last_actual_row = df[df["WeekCommencing"] < today].iloc[-1]
+    wl = last_actual_row["Over52Weeks"]
+    start_date = last_actual_row["WeekCommencing"]
+
+    future_data = []
+    for i in range(weeks_ahead):
+        next_week = start_date + pd.Timedelta(weeks=i+1)
+
+        extended_historic = df[df["WeekCommencing"] < next_week]
+        clock_start_65 = int(extended_historic["ClockStarts_52+_weeks"].dropna().quantile(0.65))
+        clock_stop_65 = int(extended_historic["ClockStops_52+_weeks"].dropna().quantile(0.65))
+
+        adjusted_clock_stop = clock_stop_65
+        if i == 0:
+            adjusted_clock_stop = last_actual_row["ClockStops_52+_weeks"]
+
+        wl = max(0, wl - adjusted_clock_stop)
+
+        if i < weeks_ahead - 1:
+            wl_next = wl + clock_start_65
+        else:
+            wl_next = wl
+
+        future_data.append({
+            "WeekCommencing": next_week,
+            "DoNothingBaseline": wl_next
+        })
+
+        wl = wl_next
+
+    return pd.DataFrame(future_data)
+
 # Simulate 'Do Nothing' Baseline
-baseline_future = simulate_future(service_df, weeks_ahead=52, initiatives=[])
+baseline_future = simulate_baseline(service_df, weeks_ahead=52)
 
 # Simulate Forecast with Initiatives
 future = simulate_future(service_df, weeks_ahead=52, initiatives=initiatives)
@@ -182,7 +228,7 @@ fig.add_trace(go.Scatter(
 if show_baseline:
     fig.add_trace(go.Scatter(
         x=baseline_future["WeekCommencing"],
-        y=baseline_future["Simulated_WaitingList"],
+        y=baseline_future["DoNothingBaseline"],
         mode="lines",
         line=dict(color="lightblue", width=0),
         fill="tozeroy",
@@ -269,7 +315,8 @@ st.plotly_chart(fig, use_container_width=True)  # Stretch chart to full width
 
 # --- Combine actuals and forecast for download ---
 download_df = pd.concat([
-    historic[["WeekCommencing", "Over52Weeks"]].rename(columns={"Over52Weeks": "Actual_WaitingList"}),
+    historic[["WeekCommencing", "Over52Weeks"]]\
+        .rename(columns={"Over52Weeks": "Actual_WaitingList"}),
     future[["WeekCommencing", "Simulated_WaitingList"]]
 ], ignore_index=True)
 
@@ -292,4 +339,4 @@ st.download_button(
 )
 
 # --- Footer ---
-st.markdown("© BI Team, Leeds Community Health")         
+st.markdown("© BI Team, Leeds Community Health")
